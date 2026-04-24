@@ -1,3 +1,15 @@
+# [2.0.0](https://github.com/misbahmunirinalkhafadh/my-react-app/compare/v1.1.1...v2.0.0) (2026-04-24)
+
+
+### Features
+
+* ubah API login ([f138ea6](https://github.com/misbahmunirinalkhafadh/my-react-app/commit/f138ea6bf9e12cf1f129b064434b1a3691cdc9d0))
+
+
+### BREAKING CHANGES
+
+* endpoint berubah
+
 ## [1.1.1](https://github.com/misbahmunirinalkhafadh/my-react-app/compare/v1.1.0...v1.1.1) (2026-04-24)
 
 
