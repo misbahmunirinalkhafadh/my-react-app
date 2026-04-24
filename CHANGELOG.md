@@ -1,3 +1,10 @@
+## [1.1.1](https://github.com/misbahmunirinalkhafadh/my-react-app/compare/v1.1.0...v1.1.1) (2026-04-24)
+
+
+### Bug Fixes
+
+* login ([b8a40b0](https://github.com/misbahmunirinalkhafadh/my-react-app/commit/b8a40b0221ec864f61b9ab949fc04930a7922ea5))
+
 # [1.1.0](https://github.com/misbahmunirinalkhafadh/my-react-app/compare/v1.0.2...v1.1.0) (2026-04-24)
 
 
