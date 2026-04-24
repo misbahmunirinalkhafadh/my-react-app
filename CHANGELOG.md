@@ -1,3 +1,10 @@
+# [1.1.0](https://github.com/misbahmunirinalkhafadh/my-react-app/compare/v1.0.2...v1.1.0) (2026-04-24)
+
+
+### Features
+
+* tambah dashboard ([c25ad6b](https://github.com/misbahmunirinalkhafadh/my-react-app/commit/c25ad6b26079fd0adfdd1699efdade2c41c205da))
+
 ## [1.0.2](https://github.com/misbahmunirinalkhafadh/my-react-app/compare/v1.0.1...v1.0.2) (2026-04-24)
 
 
