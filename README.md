@@ -1,16 +1,83 @@
-# React + Vite
+## 📦 Semantic Versioning
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Project ini sudah menggunakan **Semantic Versioning (SemVer)** yang diotomatisasi menggunakan *semantic-release*.
 
-Currently, two official plugins are available:
+### 🔢 Format Versi
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Versi mengikuti format:
 
-## React Compiler
+```
+MAJOR.MINOR.PATCH
+```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Contoh:
 
-## Expanding the ESLint configuration
+* `1.0.0` → rilis awal
+* `1.0.1` → perbaikan bug (patch)
+* `1.1.0` → penambahan fitur (minor)
+* `2.0.0` → perubahan besar / breaking change (major)
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+---
+
+### ⚙️ Cara Kerja
+
+Versioning dilakukan secara otomatis berdasarkan **commit message**:
+
+| Tipe Commit                | Dampak         |
+| -------------------------- | -------------- |
+| `fix:`                     | Patch (x.x.+1) |
+| `feat:`                    | Minor (x.+1.0) |
+| `feat!:` / BREAKING CHANGE | Major (+1.0.0) |
+
+Contoh:
+
+```
+feat: tambah dashboard
+fix: perbaiki login error
+```
+
+---
+
+### 🚀 Proses Release
+
+1. Developer push commit ke branch `main`
+2. CI/CD menjalankan semantic-release
+3. Sistem otomatis:
+
+   * Menentukan versi baru
+   * Membuat tag Git (`vX.X.X`)
+   * Update `CHANGELOG.md`
+   * (Opsional) update `package.json`
+4. Docker image dibuat menggunakan versi tersebut
+
+---
+
+### 🐳 Docker Tagging
+
+Docker image menggunakan version yang dihasilkan:
+
+```
+my-react-app:latest
+my-react-app:v1.1.0
+my-react-app:<commit-sha>
+```
+
+---
+
+### ⚠️ Catatan Penting
+
+* Gunakan format commit yang sesuai (`feat`, `fix`, dll)
+* Commit tanpa format tersebut **tidak akan memicu release**
+* Version tidak diubah manual, semuanya otomatis
+
+---
+
+### 📌 Contoh Alur
+
+```
+feat: tambah fitur login
+↓
+Release otomatis → v1.1.0
+↓
+Docker image → my-react-app:v1.1.0
+```
