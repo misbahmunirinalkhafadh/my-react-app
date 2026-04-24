@@ -36,7 +36,6 @@ concurrency:
 env:
   NODE_VERSION: '20'
   PROJECT_NAME: my-react-app
-  DOCKER_USERNAME: misbahalkhafadh
   DOCKER_IMAGE: misbahalkhafadh/my-react-app
 
 jobs:
