@@ -184,12 +184,39 @@ jobs:
         run: echo "✅ Security scanning completed"
 
   # ============================================================================
-  # JOB 5: DOCKER BUILD & PUSH TO DOCKER HUB
+  # JOB 5: SEMANTIC RELEASE
+  # ============================================================================
+  release:
+    name: Semantic Release
+    runs-on: ubuntu-latest
+    needs: [build, quality, security]
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # WAJIB untuk semantic-release
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Semantic Release
+        uses: cycjimmy/semantic-release-action@v4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ============================================================================
+  # JOB 6: DOCKER BUILD & PUSH TO DOCKER HUB
   # ============================================================================
   docker-build:
     name: Docker Build & Push
     runs-on: ubuntu-latest
-    needs: [build, quality, security]
+    needs: [build, quality, security, release]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
     steps:
       - name: Checkout code
@@ -242,12 +269,12 @@ jobs:
           echo "  - ${{ steps.tag.outputs.commit }}"
 
   # ============================================================================
-  # JOB 6: DEPLOY TO STAGING (Template)
+  # JOB 7: DEPLOY TO STAGING (Template)
   # ============================================================================
   deploy-staging:
     name: Deploy to Staging
     runs-on: ubuntu-latest
-    needs: [build, quality, security, docker-build]
+    needs: [build, quality, security, docker-build, release]
     if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
     environment:
       name: staging
@@ -295,12 +322,12 @@ jobs:
         continue-on-error: true
 
   # ============================================================================
-  # JOB 7: DEPLOY TO PRODUCTION (Template)
+  # JOB 8: DEPLOY TO PRODUCTION (Template)
   # ============================================================================
   deploy-production:
     name: Deploy to Production
     runs-on: ubuntu-latest
-    needs: [build, quality, security, docker-build]
+    needs: [build, quality, security, docker-build, release]
     if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
     environment:
       name: production
@@ -348,12 +375,12 @@ jobs:
         continue-on-error: true
 
   # ============================================================================
-  # JOB 8: WORKFLOW SUMMARY
+  # JOB 9: WORKFLOW SUMMARY
   # ============================================================================
   summary:
     name: Workflow Summary
     runs-on: ubuntu-latest
-    needs: [build, quality, security, docker-build]
+    needs: [build, quality, security, docker-build, release]
     if: always()
     steps:
       - name: Check results
