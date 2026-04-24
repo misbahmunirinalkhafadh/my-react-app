@@ -1,3 +1,10 @@
+## [1.0.2](https://github.com/misbahmunirinalkhafadh/my-react-app/compare/v1.0.1...v1.0.2) (2026-04-24)
+
+
+### Bug Fixes
+
+* cicd ([10b62fb](https://github.com/misbahmunirinalkhafadh/my-react-app/commit/10b62fb5bd63d251279ebe50cb65d11a6f74c7bd))
+
 ## [1.0.1](https://github.com/misbahmunirinalkhafadh/my-react-app/compare/v1.0.0...v1.0.1) (2026-04-24)
 
 
