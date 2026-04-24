@@ -1,0 +1,55 @@
+# Files & folders to ignore during Docker build
+
+# Node modules
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build outputs
+dist
+build
+
+# Version control
+.git
+.gitignore
+.github
+
+# IDE & editor
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Documentation
+README.md
+docs
+CHANGELOG.md
+
+# CI/CD
+.github
+.gitlab-ci.yml
+.circleci
+
+# Tests (if added later)
+__tests__
+__mocks__
+*.test.js
+*.spec.js
+coverage
+
+# Dependencies lock files (not needed in image, use package.json)
+package-lock.json
+yarn.lock
+
+# Temporary files
+tmp
+temp
+*.tmp
