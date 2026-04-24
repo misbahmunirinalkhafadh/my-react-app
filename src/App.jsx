@@ -17,6 +17,7 @@ function App() {
         </div>
         <div>
           <h1>Hello versi v1.0.0</h1>
+          <h1>Hello versi v1.1.0</h1>
           <p>
             Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
           </p>
