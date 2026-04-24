@@ -1,3 +1,10 @@
+## [1.0.1](https://github.com/misbahmunirinalkhafadh/my-react-app/compare/v1.0.0...v1.0.1) (2026-04-24)
+
+
+### Bug Fixes
+
+* nambah title ([f38ffde](https://github.com/misbahmunirinalkhafadh/my-react-app/commit/f38ffde8645a99c2435463bae142f5e0f4bd7ab0))
+
 # 1.0.0 (2026-04-24)
 
 
