@@ -28,6 +28,9 @@ on:
       - develop
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 # Cancel running workflows when a new one is triggered
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
