@@ -35,8 +35,8 @@ concurrency:
 
 env:
   NODE_VERSION: '20'
-  PROJECT_NAME: my-react-app
-  DOCKER_IMAGE: misbahalkhafadh/my-react-app
+  PROJECT_NAME: ${{ github.repository }}
+  DOCKER_IMAGE: ${{ secrets.DOCKER_USERNAME }}/${{ github.repository }}
 
 jobs:
   # ============================================================================
