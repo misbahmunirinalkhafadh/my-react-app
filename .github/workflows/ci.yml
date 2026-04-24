@@ -35,8 +35,8 @@ concurrency:
 
 env:
   NODE_VERSION: '20'
-  PROJECT_NAME: ${{ github.repository }}
-  DOCKER_IMAGE: ${{ secrets.DOCKER_USERNAME }}/${{ github.repository }}
+  PROJECT_NAME: ${{ github.event.repository.name }}
+  DOCKER_IMAGE: ${{ secrets.DOCKER_USERNAME }}/${{ github.event.repository.name }}
 
 jobs:
   # ============================================================================
