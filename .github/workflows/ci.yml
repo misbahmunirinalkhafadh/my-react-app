@@ -248,15 +248,14 @@ jobs:
 
       - name: Pull staging image and retag
         run: |
-          COMMIT_SHA="${{ needs.setup.outputs.commit-sha }}"
           VERSION="v${{ needs.setup.outputs.version }}"
           
-          echo "📦 Pulling staging image with commit SHA: ${COMMIT_SHA}"
-          docker pull ${{ env.DOCKER_IMAGE }}:${COMMIT_SHA}
+          echo "📦 Pulling staging image..."
+          docker pull ${{ env.DOCKER_IMAGE }}:staging
           
           echo "🏷️  Retagging for production..."
-          docker tag ${{ env.DOCKER_IMAGE }}:${COMMIT_SHA} ${{ env.DOCKER_IMAGE }}:${VERSION}
-          docker tag ${{ env.DOCKER_IMAGE }}:${COMMIT_SHA} ${{ env.DOCKER_IMAGE }}:latest
+          docker tag ${{ env.DOCKER_IMAGE }}:staging ${{ env.DOCKER_IMAGE }}:${VERSION}
+          docker tag ${{ env.DOCKER_IMAGE }}:staging ${{ env.DOCKER_IMAGE }}:latest
           
           echo "📤 Pushing production tags..."
           docker push ${{ env.DOCKER_IMAGE }}:${VERSION}
@@ -268,6 +267,8 @@ jobs:
           echo "📦 Production Tags:"
           echo "   - v${{ needs.setup.outputs.version }}"
           echo "   - latest"
+          echo ""
+          echo "Source: ${{ env.DOCKER_IMAGE }}:staging"
 
   # ============================================================================
   # JOB 6: HOTFIX DOCKER BUILD (Main from hotfix/* - Build New Image)
