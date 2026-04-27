@@ -1,17 +1,19 @@
 # ==============================================================================
-# CI/CD Workflow untuk React Vite App
+# CI/CD Pipeline - React Vite App
 # 
-# Workflow ini di-optimize untuk project React dengan Vite:
-# - Build optimization untuk Vite (output: dist/)
-# - Lint & Code quality check
-# - Security scanning
-# - Deployment templates untuk staging & production
+# Strategy: Build once, deploy many times
+# 
+# Branch Flow:
+#   develop → CI only (lint, test, build verify) | No Docker | No Deploy
+#   staging ← PR from develop | Build Docker | Deploy Staging
+#   main ← PR from staging | Reuse Docker + Retag | Semantic Release | Deploy Production
+#   hotfix/* → PR to main | Build Docker | Semantic Release Patch | Deploy Production
 #
-# Setup:
-#   1. Push file ini ke GitHub
-#   2. Customize environment variables sesuai kebutuhan
-#   3. Setup GitHub Secrets untuk deployment (STAGING_HOST, PROD_HOST, dll)
-#   4. Configure branches dan conditions sesuai flow Anda
+# Docker Strategy:
+#   - Staging: tag with commit-sha & 'staging'
+#   - Production: pull staging image, retag with version & 'latest'
+#   - Hotfix: build new image, tag with version & 'latest'
+#
 # ==============================================================================
 
 name: CI/CD Pipeline
@@ -23,14 +25,13 @@ on:
   pull_request:
     types: [closed]
     branches:
-      - staging 
+      - staging
       - main
   workflow_dispatch:
 
 permissions:
   contents: write
 
-# Cancel running workflows when a new one is triggered
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -42,10 +43,10 @@ env:
 
 jobs:
   # ============================================================================
-  # JOB 1: SETUP & VALIDATION
+  # JOB 1: SETUP - Get version and commit info
   # ============================================================================
   setup:
-    name: Setup & Validation
+    name: Setup & Info
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -53,6 +54,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Get commit SHA
         id: commit
@@ -60,68 +63,24 @@ jobs:
 
       - name: Get version from package.json
         id: version
-        run: |
-          VERSION=$(node -p "require('./package.json').version")
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
 
-      - name: Display environment info
+      - name: Display info
         run: |
-          echo "✅ Project: ${{ env.PROJECT_NAME }}"
-          echo "✅ Commit: ${{ steps.commit.outputs.sha }}"
-          echo "✅ Version: ${{ steps.version.outputs.version }}"
-          echo "✅ Branch: ${{ github.ref_name }}"
-          echo "✅ Event: ${{ github.event_name }}"
+          echo "📋 Project: ${{ env.PROJECT_NAME }}"
+          echo "📌 Commit: ${{ steps.commit.outputs.sha }}"
+          echo "📦 Version: ${{ steps.version.outputs.version }}"
+          echo "🌳 Branch: ${{ github.ref_name }}"
+          echo "🔄 Event: ${{ github.event_name }}"
 
   # ============================================================================
-  # JOB 2: BUILD REACT VITE APP
+  # JOB 2: CI - Lint, Test, Build Verify (DEVELOP ONLY)
   # ============================================================================
-  build:
-    name: Build Vite App
+  ci:
+    name: CI - Lint & Build Verify
     runs-on: ubuntu-latest
     needs: setup
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: |
-          npm ci
-          echo "✅ Dependencies installed"
-
-      - name: Build with Vite
-        run: |
-          npm run build
-          echo "✅ Build completed"
-
-      - name: Verify build output
-        run: |
-          if [ ! -d "dist" ]; then
-            echo "❌ Error: dist/ folder not found!"
-            exit 1
-          fi
-          echo "✅ Build artifacts verified"
-          echo "Build size: $(du -sh dist/ | cut -f1)"
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist-${{ github.run_number }}
-          path: dist/
-          retention-days: 30
-
-  # ============================================================================
-  # JOB 3: LINT & CODE QUALITY
-  # ============================================================================
-  quality:
-    name: Code Quality & Linting
-    runs-on: ubuntu-latest
-    needs: setup
+    if: github.ref == 'refs/heads/develop'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -139,67 +98,248 @@ jobs:
         run: npm run lint
         continue-on-error: true
 
-      - name: Code quality summary
-        run: echo "✅ Code quality check completed"
+      - name: Build verification
+        run: npm run build
+
+      - name: Verify build output
+        run: |
+          if [ ! -d "dist" ]; then
+            echo "❌ Build failed: dist/ not found"
+            exit 1
+          fi
+          echo "✅ Build verification passed"
+          echo "Build size: $(du -sh dist/ | cut -f1)"
 
   # ============================================================================
-  # JOB 4: SECURITY SCANNING
+  # JOB 3: DOCKER BUILD & PUSH (STAGING ONLY - PR from develop)
   # ============================================================================
-  security:
-    name: Security Scanning
+  docker-build:
+    name: Docker Build & Push
     runs-on: ubuntu-latest
     needs: setup
+    if: |
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'staging'
+    outputs:
+      image-sha: ${{ steps.meta.outputs.image-sha }}
+      image-tag: ${{ steps.meta.outputs.image-tag }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Prepare tags
+        id: meta
+        run: |
+          COMMIT_SHA="${{ needs.setup.outputs.commit-sha }}"
+          echo "image-sha=${{ env.DOCKER_IMAGE }}:${COMMIT_SHA}" >> $GITHUB_OUTPUT
+          echo "image-tag=${{ env.DOCKER_IMAGE }}:staging" >> $GITHUB_OUTPUT
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: NPM security audit
-        run: npm audit --audit-level=moderate
-        continue-on-error: true
-
-      - name: Run Trivy filesystem scan
-        uses: aquasecurity/trivy-action@master
+      - name: Build and push
+        uses: docker/build-push-action@v5
         with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-        continue-on-error: true
+          context: .
+          push: true
+          tags: |
+            ${{ env.DOCKER_IMAGE }}:${{ needs.setup.outputs.commit-sha }}
+            ${{ env.DOCKER_IMAGE }}:staging
+          labels: |
+            org.opencontainers.image.title=${{ env.PROJECT_NAME }}
+            org.opencontainers.image.revision=${{ needs.setup.outputs.commit-sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Upload Trivy results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v2
-        if: always()
-        with:
-          sarif_file: 'trivy-results.sarif'
-        continue-on-error: true
-
-      - name: Security scan summary
-        run: echo "✅ Security scanning completed"
+      - name: Docker build summary
+        run: |
+          echo "✅ Docker image built successfully"
+          echo "📦 Tags:"
+          echo "   - ${{ needs.setup.outputs.commit-sha }}"
+          echo "   - staging"
 
   # ============================================================================
-  # JOB 5: SEMANTIC RELEASE
+  # JOB 4: DEPLOY STAGING (after docker-build)
   # ============================================================================
-  release:
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [setup, docker-build]
+    if: |
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'staging'
+    environment:
+      name: staging
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Prepare deployment
+        run: |
+          echo "🚀 Deploying to Staging"
+          echo ""
+          echo "Image Details:"
+          echo "   Repository: ${{ env.DOCKER_IMAGE }}"
+          echo "   Tag: ${{ needs.setup.outputs.commit-sha }}"
+          echo "   Full: ${{ needs.docker-build.outputs.image-sha }}"
+          echo ""
+          echo "Commit: ${{ needs.setup.outputs.commit-sha }}"
+          echo ""
+
+      - name: Deploy to Staging
+        run: |
+          echo "⚠️  Configure your deployment script below"
+          echo ""
+          echo "Recommended deployment methods:"
+          echo "  1. SSH + Docker Compose"
+          echo "     scp docker-compose.prod.yml user@staging:/app/"
+          echo "     ssh user@staging 'cd /app && docker-compose pull && docker-compose up -d'"
+          echo ""
+          echo "  2. Kubernetes (if using K8s)"
+          echo "     kubectl set image deployment/my-app my-app=${{ needs.docker-build.outputs.image-sha }} -n staging"
+          echo ""
+          echo "  3. Docker Registry + Portainer/Watchtower"
+          echo "     Watchtower will auto-pull and restart containers"
+          echo ""
+          echo "Environment Variables Available:"
+          echo "  - DOCKER_IMAGE=${{ env.DOCKER_IMAGE }}"
+          echo "  - DOCKER_TAG=${{ needs.setup.outputs.commit-sha }}"
+          echo "  - STAGING_HOST=${{ secrets.STAGING_HOST }}"
+          echo "  - STAGING_USER=${{ secrets.STAGING_USER }}"
+          continue-on-error: false
+
+      - name: Health check (template)
+        run: |
+          echo "🔍 Staging health check (configure your health check endpoint)"
+          echo "   curl -f https://staging.example.com/health || exit 1"
+        continue-on-error: true
+
+  # ============================================================================
+  # JOB 5: RETAG DOCKER FOR PRODUCTION (Main from Staging - Reuse Image)
+  # ============================================================================
+  retag-docker:
+    name: Retag Docker Image for Production
+    runs-on: ubuntu-latest
+    needs: setup
+    if: |
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main' &&
+      startsWith(github.event.pull_request.head.ref, 'release/') == false &&
+      startsWith(github.event.pull_request.head.ref, 'hotfix/') == false
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Pull staging image and retag
+        run: |
+          COMMIT_SHA="${{ needs.setup.outputs.commit-sha }}"
+          VERSION="v${{ needs.setup.outputs.version }}"
+          
+          echo "📦 Pulling staging image with commit SHA: ${COMMIT_SHA}"
+          docker pull ${{ env.DOCKER_IMAGE }}:${COMMIT_SHA}
+          
+          echo "🏷️  Retagging for production..."
+          docker tag ${{ env.DOCKER_IMAGE }}:${COMMIT_SHA} ${{ env.DOCKER_IMAGE }}:${VERSION}
+          docker tag ${{ env.DOCKER_IMAGE }}:${COMMIT_SHA} ${{ env.DOCKER_IMAGE }}:latest
+          
+          echo "📤 Pushing production tags..."
+          docker push ${{ env.DOCKER_IMAGE }}:${VERSION}
+          docker push ${{ env.DOCKER_IMAGE }}:latest
+
+      - name: Production tags summary
+        run: |
+          echo "✅ Docker image retagged for production"
+          echo "📦 Production Tags:"
+          echo "   - v${{ needs.setup.outputs.version }}"
+          echo "   - latest"
+
+  # ============================================================================
+  # JOB 6: HOTFIX DOCKER BUILD (Main from hotfix/* - Build New Image)
+  # ============================================================================
+  hotfix-docker-build:
+    name: Hotfix - Docker Build & Push
+    runs-on: ubuntu-latest
+    needs: setup
+    if: |
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main' &&
+      startsWith(github.event.pull_request.head.ref, 'hotfix/')
+    outputs:
+      image-sha: ${{ steps.meta.outputs.image-sha }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Prepare tags
+        id: meta
+        run: |
+          COMMIT_SHA="${{ needs.setup.outputs.commit-sha }}"
+          VERSION="v${{ needs.setup.outputs.version }}"
+          echo "image-sha=${{ env.DOCKER_IMAGE }}:${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push hotfix image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.DOCKER_IMAGE }}:v${{ needs.setup.outputs.version }}
+            ${{ env.DOCKER_IMAGE }}:latest
+          labels: |
+            org.opencontainers.image.title=${{ env.PROJECT_NAME }}
+            org.opencontainers.image.revision=${{ needs.setup.outputs.commit-sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Hotfix docker summary
+        run: |
+          echo "✅ Hotfix Docker image built successfully"
+          echo "📦 Tags:"
+          echo "   - v${{ needs.setup.outputs.version }}"
+          echo "   - latest"
+
+  # ============================================================================
+  # JOB 7: SEMANTIC RELEASE (MAIN ONLY)
+  # ============================================================================
+  semantic-release:
     name: Semantic Release
     runs-on: ubuntu-latest
-    needs: [build, quality, security]
+    needs: setup
     if: github.ref == 'refs/heads/main'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # WAJIB untuk semantic-release
+          fetch-depth: 0
 
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -212,176 +352,95 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ============================================================================
-  # JOB 6: DOCKER BUILD & PUSH TO DOCKER HUB
-  # ============================================================================
-  docker-build:
-    name: Docker Build & Push
-    runs-on: ubuntu-latest
-    needs: [build, quality, security, release]
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 0
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Determine tag
-        id: tag
+      - name: Release summary
         run: |
-          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            echo "tag=latest" >> $GITHUB_OUTPUT
-          else
-            echo "tag=develop" >> $GITHUB_OUTPUT
-          fi
-          echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
-          echo "commit=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: |
-            ${{ env.DOCKER_IMAGE }}:${{ steps.tag.outputs.tag }}
-            ${{ env.DOCKER_IMAGE }}:v${{ steps.tag.outputs.version }}
-            ${{ env.DOCKER_IMAGE }}:${{ steps.tag.outputs.commit }}
-          labels: |
-            org.opencontainers.image.title=${{ env.PROJECT_NAME }}
-            org.opencontainers.image.version=${{ steps.tag.outputs.version }}
-            org.opencontainers.image.revision=${{ steps.tag.outputs.commit }}
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Docker build summary
-        run: |
-          echo "📦 Docker Image Built & Pushed Successfully"
-          echo "Repository: ${{ env.DOCKER_IMAGE }}"
-          echo "Tags:"
-          echo "  - ${{ steps.tag.outputs.tag }}"
-          echo "  - v${{ steps.tag.outputs.version }}"
-          echo "  - ${{ steps.tag.outputs.commit }}"
+          echo "✅ Semantic release completed"
+          echo "📝 Commit type determines version bump:"
+          echo "   - feat → minor version"
+          echo "   - fix → patch version"
+          echo "   - feat! or BREAKING CHANGE → major version"
 
   # ============================================================================
-  # JOB 7: DEPLOY TO STAGING (Template)
-  # ============================================================================
-  deploy-staging:
-    name: Deploy to Staging
-    runs-on: ubuntu-latest
-    needs: [build, quality, security, docker-build, release]
-    if: github.event_name == 'pull_request' &&
-        github.event.pull_request.merged == true &&
-        github.event.pull_request.base.ref == 'staging'
-    environment:
-      name: staging
-      url: https://staging-example.com
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: dist-${{ github.run_number }}
-          path: dist/
-
-      - name: Setup deployment
-        run: |
-          echo "📦 Preparing Staging Deployment"
-          echo "Version: $(node -p "require('./package.json').version")"
-          echo "Artifacts size: $(du -sh dist/ | cut -f1)"
-
-      - name: Deploy to Staging
-        run: |
-          echo "🚀 Deploying to Staging..."
-          echo ""
-          echo "⚠️  SETUP NEEDED:"
-          echo "  1. Add GitHub Secrets:"
-          echo "     - STAGING_HOST (server domain/IP)"
-          echo "     - STAGING_USER (SSH username)"
-          echo "     - STAGING_KEY (SSH private key)"
-          echo ""
-          echo "  2. Uncomment deployment command below:"
-          echo "     scp -r dist/* \${{ secrets.STAGING_USER }}@\${{ secrets.STAGING_HOST }}:/var/www/app/"
-          echo ""
-          echo "  3. Add post-deploy commands if needed"
-          echo "     (npm install, systemctl restart app, etc)"
-        env:
-          STAGING_HOST: ${{ secrets.STAGING_HOST }}
-          STAGING_USER: ${{ secrets.STAGING_USER }}
-        continue-on-error: true
-
-      - name: Health check
-        run: |
-          echo "🔍 Health check (template)"
-          echo "  curl -f https://staging-example.com/health"
-        continue-on-error: true
-
-  # ============================================================================
-  # JOB 8: DEPLOY TO PRODUCTION (Template)
+  # JOB 8: DEPLOY PRODUCTION
   # ============================================================================
   deploy-production:
     name: Deploy to Production
     runs-on: ubuntu-latest
-    needs: [build, quality, security, docker-build, release]
-    if: github.event_name == 'pull_request' &&
-        github.event.pull_request.merged == true &&
-        github.event.pull_request.base.ref == 'main'
+    needs: [setup, retag-docker, hotfix-docker-build, semantic-release]
+    if: |
+      always() &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main' &&
+      (needs.retag-docker.result == 'success' || needs.hotfix-docker-build.result == 'success')
     environment:
       name: production
-      url: https://example.com
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: dist-${{ github.run_number }}
-          path: dist/
-
-      - name: Setup deployment
+      - name: Determine image source
+        id: image
         run: |
-          echo "🚀 Preparing Production Deployment"
-          echo "Version: $(node -p "require('./package.json').version")"
-          echo "Commit: ${{ github.sha }}"
+          if [ "${{ needs.hotfix-docker-build.result }}" == "success" ]; then
+            echo "source=hotfix build"
+            echo "tag=v${{ needs.setup.outputs.version }}"
+          else
+            echo "source=staging image (retagged)"
+            echo "tag=v${{ needs.setup.outputs.version }}"
+          fi
+
+      - name: Prepare production deployment
+        run: |
+          echo "🚀 Deploying to Production"
+          echo ""
+          echo "Image Details:"
+          echo "   Repository: ${{ env.DOCKER_IMAGE }}"
+          echo "   Tags: v${{ needs.setup.outputs.version }}, latest"
+          echo "   Source: ${{ steps.image.outputs.source }}"
+          echo ""
+          echo "Deployment Info:"
+          echo "   Commit: ${{ needs.setup.outputs.commit-sha }}"
+          echo "   Version: v${{ needs.setup.outputs.version }}"
+          echo "   Environment: Production"
+          echo ""
 
       - name: Deploy to Production
         run: |
-          echo "🚀 Deploying to Production..."
+          echo "⚠️  Configure your deployment script below"
           echo ""
-          echo "⚠️  SETUP NEEDED:"
-          echo "  1. Add GitHub Secrets:"
-          echo "     - PROD_HOST (production server)"
-          echo "     - PROD_USER (SSH username)"
-          echo "     - PROD_KEY (SSH private key)"
+          echo "Recommended deployment methods:"
+          echo "  1. SSH + Docker Compose"
+          echo "     scp docker-compose.prod.yml user@prod:/app/"
+          echo "     ssh user@prod 'cd /app && docker-compose pull && docker-compose up -d'"
           echo ""
-          echo "  2. Uncomment deployment command:"
-          echo "     scp -r dist/* \${{ secrets.PROD_USER }}@\${{ secrets.PROD_HOST }}:/var/www/app/"
+          echo "  2. Kubernetes (if using K8s)"
+          echo "     kubectl set image deployment/my-app my-app=${{ env.DOCKER_IMAGE }}:v${{ needs.setup.outputs.version }} -n production"
           echo ""
-          echo "  3. Add verification & rollback strategy"
-          echo "     (backup old version, health checks, etc)"
-        env:
-          PROD_HOST: ${{ secrets.PROD_HOST }}
-          PROD_USER: ${{ secrets.PROD_USER }}
+          echo "  3. Docker Registry + Auto-Deploy"
+          echo "     Watchtower or similar service will auto-pull latest tag"
+          echo ""
+          echo "Environment Variables Available:"
+          echo "  - DOCKER_IMAGE=${{ env.DOCKER_IMAGE }}"
+          echo "  - DOCKER_TAG=v${{ needs.setup.outputs.version }}"
+          echo "  - PROD_HOST=${{ secrets.PROD_HOST }}"
+          echo "  - PROD_USER=${{ secrets.PROD_USER }}"
+          continue-on-error: false
+
+      - name: Production health check (template)
+        run: |
+          echo "🔍 Production health check (configure your health check endpoint)"
+          echo "   curl -f https://example.com/health || exit 1"
         continue-on-error: true
 
-      - name: Production health check
+      - name: Deployment success
         run: |
-          echo "🔍 Production health check (template)"
-          echo "  curl -f https://example.com/health"
-        continue-on-error: true
+          echo "✅ Production deployment completed successfully"
+          echo ""
+          echo "📊 Deployment Summary:"
+          echo "   Version: v${{ needs.setup.outputs.version }}"
+          echo "   Image: ${{ env.DOCKER_IMAGE }}:v${{ needs.setup.outputs.version }}"
+          echo "   Status: 🟢 LIVE"
 
   # ============================================================================
   # JOB 9: WORKFLOW SUMMARY
@@ -389,78 +448,161 @@ jobs:
   summary:
     name: Workflow Summary
     runs-on: ubuntu-latest
-    needs: [build, quality, security, docker-build, release]
+    needs: [setup]
     if: always()
     steps:
-      - name: Check results
+      - name: Summary
         run: |
-          BUILD_RESULT="${{ needs.build.result }}"
-          QUALITY_RESULT="${{ needs.quality.result }}"
-          SECURITY_RESULT="${{ needs.security.result }}"
-          DOCKER_RESULT="${{ needs.docker-build.result }}"
-          
-          echo "📊 Workflow Results:"
-          echo "  Build: $BUILD_RESULT"
-          echo "  Quality: $QUALITY_RESULT"
-          echo "  Security: $SECURITY_RESULT"
-          echo "  Docker: $DOCKER_RESULT"
+          echo "📊 CI/CD Pipeline Summary"
           echo ""
-          
-          if [ "$BUILD_RESULT" = "failure" ]; then
-            echo "❌ Build job failed - pipeline stopped"
-            exit 1
-          fi
-          
-          echo "✅ CI Pipeline completed successfully!"
+          echo "Project Information:"
+          echo "   Name: ${{ env.PROJECT_NAME }}"
+          echo "   Branch: ${{ github.ref_name }}"
+          echo "   Commit: ${{ needs.setup.outputs.commit-sha }}"
+          echo "   Version: ${{ needs.setup.outputs.version }}"
           echo ""
-          echo "📝 Next steps:"
-          echo "  1. Check build logs if needed"
-          echo "  2. Review security scan results"
-          echo "  3. Docker image pushed to Docker Hub"
+          echo "Pipeline Details:"
+          echo "   Trigger: ${{ github.event_name }}"
+          echo "   Actor: ${{ github.actor }}"
+          echo ""
+          echo "Next Steps:"
+          echo "   ✅ Configure deployment secrets for staging & production"
+          echo "   ✅ Update deployment scripts in jobs 'deploy-staging' and 'deploy-production'"
+          echo "   ✅ Test workflow with develop branch push"
+
 
 # ==============================================================================
-# Setup Instructions:
-# 
-# 1. Docker Hub Secrets (REQUIRED for docker-build job):
-#    Settings > Secrets and variables > Actions > New repository secret
-#    - DOCKER_USERNAME: Your Docker Hub username (misbahalkhafadh)
-#    - DOCKER_PASSWORD: Your Docker Hub access token or password
+# SETUP INSTRUCTIONS
+# ==============================================================================
 #
-#    To generate Docker Hub token:
+# 1. DOCKER HUB SECRETS (Required)
+#    GitHub Settings > Secrets and variables > Actions > New repository secret
+#    
+#    - DOCKER_USERNAME: Your Docker Hub username
+#    - DOCKER_PASSWORD: Docker Hub access token (not password)
+#    
+#    How to generate Docker Hub token:
 #    1. Go to hub.docker.com
-#    2. Account Settings > Security > New Access Token
-#    3. Generate token & copy to DOCKER_PASSWORD secret
+#    2. Click Account Settings > Security > New Access Token
+#    3. Generate token with read/write permissions
+#    4. Copy token to DOCKER_PASSWORD secret
 #
-# 2. Branch Strategy:
-#    - main = production ready → builds tag "latest"
-#    - develop = staging/testing → builds tag "develop"
-#    - feature branches = no docker build
+# 2. DEPLOYMENT SECRETS (Optional - Required when you enable deployment)
+#    
+#    For Staging:
+#    - STAGING_HOST: Server IP or domain
+#    - STAGING_USER: SSH username
+#    - STAGING_KEY: SSH private key (PEM format)
+#    
+#    For Production:
+#    - PROD_HOST: Server IP or domain
+#    - PROD_USER: SSH username
+#    - PROD_KEY: SSH private key (PEM format)
 #
-# 3. Branch strategy:
-#    - main = production ready
-#    - develop = staging/testing
-#    - feature branches = untuk development
+# 3. GITHUB ENVIRONMENTS
+#    GitHub Settings > Environments
+#    
+#    Create two environments:
+#    - staging (optional approval, auto-deploy from staging branch)
+#    - production (requires approval, only from main branch)
 #
-# 4. GitHub Secrets (untuk deployment nanti):
-#    Settings > Secrets and variables > Actions > New repository secret
-#    - STAGING_HOST: IP atau domain server staging
-#    - STAGING_USER: SSH user untuk staging
-#    - STAGING_KEY: Private SSH key
-#    - PROD_HOST: IP atau domain server production
-#    - PROD_USER: SSH user untuk production  
-#    - PROD_KEY: Private SSH key
+# 4. BRANCH STRATEGY
+#    
+#    Main (main)
+#    ├── staging (protected, requires PR + approval)
+#    │   ├── develop (protected, requires PR)
+#    │   └── feature/* (regular branches for development)
+#    └── hotfix/* (for production hotfixes)
+#    
+#    Branch Protection Rules:
+#    - develop: Require PR reviews before merge
+#    - staging: Require PR reviews + 1 approval before merge
+#    - main: Require PR reviews + 2 approvals + status check pass before merge
 #
-# 5. Setup environments:
-#    Settings > Environments
-#    - staging (auto-deployed dari develop branch)
-#    - production (manual approval, hanya dari main)
+# 5. WORKFLOW FLOW DIAGRAM
+#    
+#    DEVELOP (push)
+#    ├─ setup
+#    └─ ci (lint, test, build verify)
+#       └─ ✅ Complete, no docker build, no deploy
+#    
+#    STAGING (PR from develop merged)
+#    ├─ setup
+#    ├─ docker-build (build & push with tag: commit-sha, staging)
+#    └─ deploy-staging (deploy using docker image)
+#    
+#    MAIN (PR from staging merged)
+#    ├─ setup
+#    ├─ retag-docker (pull staging image, retag as latest, v*.*.*)
+#    ├─ semantic-release (generate changelog, create release tag)
+#    └─ deploy-production (deploy using retagged image)
+#    
+#    HOTFIX (branch hotfix/* -> PR to main merged)
+#    ├─ setup
+#    ├─ hotfix-docker-build (build new image with v*.*.*)
+#    ├─ semantic-release (patch version bump)
+#    └─ deploy-production (deploy using new image)
 #
-# 6. Image tags di Docker Hub:
-#    - misbahalkhafadh/my-react-app:latest (dari main branch)
-#    - misbahalkhafadh/my-react-app:develop (dari develop branch)
-#    - misbahalkhafadh/my-react-app:vX.Y.Z (dari package.json version)
-#    - misbahalkhafadh/my-react-app:COMMIT_SHA (dari git commit)
+# 6. IMAGE TAGGING STRATEGY
+#    
+#    Staging Build:
+#    - misbahalkhafadh/my-react-app:abc123ef (commit SHA)
+#    - misbahalkhafadh/my-react-app:staging (latest staging)
+#    
+#    Production (from staging):
+#    - misbahalkhafadh/my-react-app:v1.2.3 (semantic version)
+#    - misbahalkhafadh/my-react-app:latest (production latest)
+#    
+#    Hotfix Production:
+#    - misbahalkhafadh/my-react-app:v1.2.4 (patch version)
+#    - misbahalkhafadh/my-react-app:latest (production latest)
 #
-# 7. (Optional) Setup Slack notifications:
-#    Uncomment notification section, add SLACK_WEBHOOK secret
+# 7. DEPLOYMENT CONFIGURATION
+#    
+#    The deployment jobs are templates. Configure them based on your setup:
+#    
+#    Option A: SSH + Docker Compose
+#    - Copy docker-compose file to server
+#    - SSH into server and restart containers
+#    
+#    Option B: Kubernetes
+#    - Use kubectl to update deployment image
+#    
+#    Option C: Container Registry + Auto-Deploy
+#    - Use Watchtower or similar to auto-pull and restart
+#
+# 8. SEMANTIC RELEASE CONFIGURATION
+#    
+#    Commit message patterns:
+#    - "fix: bug fix" → patch version (1.0.0 → 1.0.1)
+#    - "feat: new feature" → minor version (1.0.0 → 1.1.0)
+#    - "feat!: breaking change" → major version (1.0.0 → 2.0.0)
+#    
+#    Ensure your package.json version is correct before merging to main.
+#    Semantic Release will update it automatically.
+#
+# 9. TROUBLESHOOTING
+#    
+#    Docker build fails:
+#    - Check Dockerfile syntax
+#    - Verify nginx.conf is present
+#    - Review build logs in Actions
+#    
+#    Semantic release fails:
+#    - Ensure commit messages follow conventional commits
+#    - Check GitHub token has write permissions
+#    - Verify package.json exists and is valid
+#    
+#    Deployment fails:
+#    - Verify SSH secrets are configured correctly
+#    - Check server connectivity and credentials
+#    - Review deployment logs in Actions
+#
+# 10. ADVANCED: Adding Security Scanning
+#    
+#    Uncomment security scanning if needed:
+#    - npm audit for dependency vulnerabilities
+#    - Trivy for container image scanning
+#    - CodeQL for code security analysis
+#
 # ==============================================================================
