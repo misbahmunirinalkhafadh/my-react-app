@@ -15,23 +15,23 @@ COPY . .
 # Build the app
 RUN npm run build
 
-# Stage 2: Serve
-FROM node:20-alpine
+# Stage 2: Serve with Nginx
+FROM nginx:alpine
 
-WORKDIR /app
+WORKDIR /usr/share/nginx/html
 
-# Install simple HTTP server
-RUN npm install -g serve
+# Copy nginx configuration
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 # Copy built app from builder
-COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/dist .
 
 # Expose port
-EXPOSE 3000
+EXPOSE 80
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:3000', (r) => {if (r.statusCode !== 200) throw new Error(r.statusCode)})"
+  CMD wget --quiet --tries=1 --spider http://localhost:80/ || exit 1
 
-# Start the app
-CMD ["serve", "-s", "dist", "-l", "3000"]
+# Start Nginx
+CMD ["nginx", "-g", "daemon off;"]
