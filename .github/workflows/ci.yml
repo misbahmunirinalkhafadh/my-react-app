@@ -236,7 +236,15 @@ jobs:
       github.event.pull_request.base.ref == 'main' &&
       startsWith(github.event.pull_request.head.ref, 'release/') == false &&
       startsWith(github.event.pull_request.head.ref, 'hotfix/') == false
+    outputs:
+      new-version: ${{ steps.check.outputs.is-new }}
+      version: ${{ steps.check.outputs.version }}
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -246,7 +254,25 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
+      - name: Check if version tag already exists
+        id: check
+        run: |
+          VERSION="v${{ needs.setup.outputs.version }}"
+          
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          
+          # Check apakah tag sudah ada di git
+          if git rev-parse "${VERSION}" >/dev/null 2>&1; then
+            echo "❌ Version tag ${VERSION} already exists in git!"
+            echo "is-new=false" >> $GITHUB_OUTPUT
+            exit 0
+          else
+            echo "✅ Version tag ${VERSION} is new"
+            echo "is-new=true" >> $GITHUB_OUTPUT
+          fi
+
       - name: Pull staging image and retag
+        if: steps.check.outputs.is-new == 'true'
         run: |
           VERSION="v${{ needs.setup.outputs.version }}"
           
@@ -261,14 +287,31 @@ jobs:
           docker push ${{ env.DOCKER_IMAGE }}:${VERSION}
           docker push ${{ env.DOCKER_IMAGE }}:latest
 
-      - name: Production tags summary
+      - name: Production tags summary (New Version)
+        if: steps.check.outputs.is-new == 'true'
         run: |
           echo "✅ Docker image retagged for production"
           echo "📦 Production Tags:"
-          echo "   - v${{ needs.setup.outputs.version }}"
+          echo "   - ${{ steps.check.outputs.version }}"
           echo "   - latest"
           echo ""
           echo "Source: ${{ env.DOCKER_IMAGE }}:staging"
+
+      - name: Version already exists (Skip)
+        if: steps.check.outputs.is-new == 'false'
+        run: |
+          echo "⚠️  Version tag already exists, skipping retag"
+          echo "Tag: ${{ steps.check.outputs.version }}"
+          echo ""
+          echo "This can happen if:"
+          echo "  1. Version in package.json hasn't changed"
+          echo "  2. Semantic Release didn't create new tag"
+          echo "  3. Manual tag with same version exists"
+          echo ""
+          echo "To fix:"
+          echo "  1. Update package.json version manually, or"
+          echo "  2. Use conventional commit messages (feat:, fix:, feat!:)"
+          echo "  3. Ensure commit is on develop branch before merging to staging"
 
   # ============================================================================
   # JOB 6: HOTFIX DOCKER BUILD (Main from hotfix/* - Build New Image)
@@ -373,7 +416,8 @@ jobs:
       github.event_name == 'pull_request' &&
       github.event.pull_request.merged == true &&
       github.event.pull_request.base.ref == 'main' &&
-      (needs.retag-docker.result == 'success' || needs.hotfix-docker-build.result == 'success')
+      (needs.retag-docker.result == 'success' || needs.hotfix-docker-build.result == 'success') &&
+      (needs.retag-docker.outputs.new-version == 'true' || needs.hotfix-docker-build.result == 'success')
     environment:
       name: production
     steps:
@@ -384,14 +428,21 @@ jobs:
         id: image
         run: |
           if [ "${{ needs.hotfix-docker-build.result }}" == "success" ]; then
-            echo "source=hotfix build"
+            echo "source=hotfix build (new version)"
             echo "tag=v${{ needs.setup.outputs.version }}"
-          else
+            echo "should-deploy=true"
+          elif [ "${{ needs.retag-docker.outputs.new-version }}" == "true" ]; then
             echo "source=staging image (retagged)"
             echo "tag=v${{ needs.setup.outputs.version }}"
+            echo "should-deploy=true"
+          else
+            echo "source=skipped (version already exists)"
+            echo "tag=v${{ needs.setup.outputs.version }}"
+            echo "should-deploy=false"
           fi
 
       - name: Prepare production deployment
+        if: steps.image.outputs.should-deploy == 'true'
         run: |
           echo "🚀 Deploying to Production"
           echo ""
@@ -407,6 +458,7 @@ jobs:
           echo ""
 
       - name: Deploy to Production
+        if: steps.image.outputs.should-deploy == 'true'
         run: |
           echo "⚠️  Configure your deployment script below"
           echo ""
@@ -429,12 +481,14 @@ jobs:
           continue-on-error: false
 
       - name: Production health check (template)
+        if: steps.image.outputs.should-deploy == 'true'
         run: |
           echo "🔍 Production health check (configure your health check endpoint)"
           echo "   curl -f https://example.com/health || exit 1"
         continue-on-error: true
 
       - name: Deployment success
+        if: steps.image.outputs.should-deploy == 'true'
         run: |
           echo "✅ Production deployment completed successfully"
           echo ""
@@ -442,6 +496,24 @@ jobs:
           echo "   Version: v${{ needs.setup.outputs.version }}"
           echo "   Image: ${{ env.DOCKER_IMAGE }}:v${{ needs.setup.outputs.version }}"
           echo "   Status: 🟢 LIVE"
+
+      - name: Deployment skipped (Version already exists)
+        if: steps.image.outputs.should-deploy == 'false'
+        run: |
+          echo "⏭️  Production deployment skipped"
+          echo ""
+          echo "Reason: Version tag already exists"
+          echo "Tag: v${{ needs.setup.outputs.version }}"
+          echo ""
+          echo "This typically means:"
+          echo "  ✓ No code changes to staging (same commit SHA)"
+          echo "  ✓ Or version in package.json wasn't updated"
+          echo ""
+          echo "To trigger new deployment:"
+          echo "  1. Make code changes on develop"
+          echo "  2. Merge develop → staging (triggers docker build)"
+          echo "  3. Update package.json version or use conventional commits"
+          echo "  4. Merge staging → main (triggers semantic release + deploy)"
 
   # ============================================================================
   # JOB 9: WORKFLOW SUMMARY
