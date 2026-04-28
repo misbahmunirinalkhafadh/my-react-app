@@ -385,7 +385,13 @@ jobs:
     name: Semantic Release
     runs-on: ubuntu-latest
     needs: setup
-    if: github.ref == 'refs/heads/main'
+    if: |
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main'
+    outputs:
+      new-version: ${{ steps.version.outputs.new-version }}
+      version: ${{ steps.version.outputs.version }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -400,10 +406,66 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Debug - Check git status
+        run: |
+          echo "📋 Git Status:"
+          git status
+          echo ""
+          echo "🏷️  Current Tags:"
+          git tag -l | tail -20
+          echo ""
+          echo "📝 Recent Commits:"
+          git log --oneline -15
+          echo ""
+          echo "🌳 Current Branch: $(git rev-parse --abbrev-ref HEAD)"
+          echo "📍 Current HEAD: $(git rev-parse HEAD)"
+
+      - name: Debug - Check commit messages
+        run: |
+          echo "📊 Commits since last tag:"
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -z "$LAST_TAG" ]; then
+            echo "ℹ️  No previous tags found - analyzing all commits"
+            git log --oneline --format='%H %s' | head -20
+          else
+            echo "Last tag: $LAST_TAG"
+            git log ${LAST_TAG}..HEAD --oneline --format='%H %s'
+          fi
+
       - name: Run Semantic Release
         uses: cycjimmy/semantic-release-action@v4
+        with:
+          dry_run: false
+          branches: |
+            [
+              "main"
+            ]
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Capture version
+        id: version
+        run: |
+          NEW_VERSION=$(node -p "require('./package.json').version")
+          OLD_VERSION="${{ needs.setup.outputs.version }}"
+          
+          echo "version=${NEW_VERSION}" >> $GITHUB_OUTPUT
+          
+          if [ "${NEW_VERSION}" != "${OLD_VERSION}" ]; then
+            echo "new-version=true" >> $GITHUB_OUTPUT
+            echo "✅ Version updated: ${OLD_VERSION} → ${NEW_VERSION}"
+          else
+            echo "new-version=false" >> $GITHUB_OUTPUT
+            echo "ℹ️  Version unchanged: ${NEW_VERSION}"
+          fi
+
+      - name: Check if new version was created
+        run: |
+          echo "🔍 Checking for new version..."
+          echo "Current package.json version: $(node -p "require('./package.json').version")"
+          echo ""
+          echo "📦 Latest tags:"
+          git tag -l | tail -5
 
       - name: Release summary
         run: |
@@ -412,6 +474,12 @@ jobs:
           echo "   - feat → minor version"
           echo "   - fix → patch version"
           echo "   - feat! or BREAKING CHANGE → major version"
+          echo ""
+          echo "💡 Troubleshooting:"
+          echo "   If no new version was created:"
+          echo "   1. Check commit messages use conventional format (feat:, fix:, etc)"
+          echo "   2. Ensure commits are on the main branch"
+          echo "   3. Verify GITHUB_TOKEN has write permissions"
 
   # ============================================================================
   # JOB 8: DEPLOY PRODUCTION
@@ -426,7 +494,7 @@ jobs:
       github.event.pull_request.merged == true &&
       github.event.pull_request.base.ref == 'main' &&
       (needs.retag-docker.result == 'success' || needs.hotfix-docker-build.result == 'success') &&
-      (needs.retag-docker.outputs.new-version == 'true' || needs.hotfix-docker-build.result == 'success' || needs.semantic-release.result == 'success')
+      (needs.retag-docker.outputs.new-version == 'true' || needs.hotfix-docker-build.result == 'success' || needs.semantic-release.outputs.new-version == 'true')
     environment:
       name: production
     steps:
