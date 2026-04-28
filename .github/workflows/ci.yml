@@ -262,22 +262,101 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Check if version tag already exists
+      - name: Analyze commits and determine version
         id: check
         run: |
-          # Get the current version from package.json (may be updated by semantic-release)
-          VERSION="v$(node -p "require('./package.json').version")"
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          VERSION="v${CURRENT_VERSION}"
           
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          # Get last tag
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
           
-          # Check if tag already exists in git
+          echo "📋 Current version: ${CURRENT_VERSION}"
+          echo "🏷️  Last tag: ${LAST_TAG:-'(none)'}"
+          echo ""
+          
+          # Check if tag already exists
           if git rev-parse "${VERSION}" >/dev/null 2>&1; then
-            echo "❌ Version tag ${VERSION} already exists in git!"
-            echo "is-new=false" >> $GITHUB_OUTPUT
-            exit 0
+            echo "❌ Version tag ${VERSION} already exists"
+            
+            # Analyze commits since last tag
+            if [ -n "${LAST_TAG}" ]; then
+              echo "📊 Analyzing commits since ${LAST_TAG}..."
+              
+              # Count commits by type
+              FEAT_COUNT=$(git log ${LAST_TAG}..HEAD --format='%s' | grep -c '^feat:' || true)
+              FIX_COUNT=$(git log ${LAST_TAG}..HEAD --format='%s' | grep -c '^fix:' || true)
+              BREAKING=$(git log ${LAST_TAG}..HEAD --format='%B' | grep -c 'BREAKING CHANGE:' || true)
+              
+              echo "   - feat commits: ${FEAT_COUNT}"
+              echo "   - fix commits: ${FIX_COUNT}"
+              echo "   - breaking changes: ${BREAKING}"
+              echo ""
+              
+              # If there are new commits, bump version
+              if [ $((FEAT_COUNT + FIX_COUNT + BREAKING)) -gt 0 ]; then
+                echo "✅ New commits detected! Bumping version..."
+                
+                # Parse version
+                IFS='.' read -r MAJOR MINOR PATCH <<< "${CURRENT_VERSION}"
+                
+                # Determine bump type
+                if [ ${BREAKING} -gt 0 ]; then
+                  MAJOR=$((MAJOR + 1))
+                  MINOR=0
+                  PATCH=0
+                  BUMP_TYPE="major"
+                elif [ ${FEAT_COUNT} -gt 0 ]; then
+                  MINOR=$((MINOR + 1))
+                  PATCH=0
+                  BUMP_TYPE="minor"
+                else
+                  PATCH=$((PATCH + 1))
+                  BUMP_TYPE="patch"
+                fi
+                
+                NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+                VERSION="v${NEW_VERSION}"
+                
+                echo "🚀 Version bump (${BUMP_TYPE}): ${CURRENT_VERSION} → ${NEW_VERSION}"
+                echo ""
+                
+                # Update package.json
+                node -e "const pkg = require('./package.json'); pkg.version = '${NEW_VERSION}'; require('fs').writeFileSync('./package.json', JSON.stringify(pkg, null, 2) + '\n');"
+                
+                echo "✅ Updated package.json to version ${NEW_VERSION}"
+                echo "is-new=true" >> $GITHUB_OUTPUT
+              else
+                echo "ℹ️  No new commits detected, skipping version bump"
+                echo "is-new=false" >> $GITHUB_OUTPUT
+              fi
+            else
+              echo "ℹ️  No previous tags found, cannot determine if there are new commits"
+              echo "is-new=false" >> $GITHUB_OUTPUT
+            fi
           else
             echo "✅ Version tag ${VERSION} is new"
             echo "is-new=true" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Commit version bump
+        if: steps.check.outputs.is-new == 'true'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          # Check if package.json was modified
+          if git diff --quiet package.json; then
+            echo "ℹ️  package.json not modified, no commit needed"
+          else
+            echo "📝 Committing version bump..."
+            VERSION="${{ steps.check.outputs.version }}"
+            git add package.json
+            git commit -m "chore(release): bump version to ${VERSION#v} [skip ci]"
+            git push
+            echo "✅ Version bump committed and pushed"
           fi
 
       - name: Pull staging image and retag
@@ -309,18 +388,20 @@ jobs:
       - name: Version already exists (Skip)
         if: steps.check.outputs.is-new == 'false'
         run: |
-          echo "⚠️  Version tag already exists, skipping retag"
+          echo "⏭️  Skipping retag - no changes detected"
           echo "Tag: ${{ steps.check.outputs.version }}"
           echo ""
-          echo "This can happen if:"
-          echo "  1. Version in package.json hasn't changed"
-          echo "  2. Semantic Release didn't create new tag"
-          echo "  3. Manual tag with same version exists"
+          echo "Reason:"
+          echo "  • Version already exists AND"
+          echo "  • No new commits with conventional format (feat:, fix:)"
           echo ""
-          echo "To fix:"
-          echo "  1. Update package.json version manually, or"
-          echo "  2. Use conventional commit messages (feat:, fix:, feat!:)"
-          echo "  3. Ensure commit is on develop branch before merging to staging"
+          echo "To create a new version:"
+          echo "  1. Use conventional commit messages:"
+          echo "     - 'feat: description' → minor version bump"
+          echo "     - 'fix: description' → patch version bump"
+          echo "     - 'feat!: description' or 'BREAKING CHANGE:' → major bump"
+          echo "  2. Make commits on develop branch"
+          echo "  3. Merge develop → staging → main"
 
   # ============================================================================
   # JOB 6: HOTFIX DOCKER BUILD (Main from hotfix/* - Build New Image)
